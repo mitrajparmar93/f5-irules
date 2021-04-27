@@ -1,0 +1,77 @@
+#iRule for MyADPRAAS Servers and AWS Hybrid Load Balancing
+#Percentage Values are from 0-10 instead of 0-100 viz. 5 is 50%
+#######################LOGIC##################################
+#awsdc1 active 100% and dc1 active < 40% then send to aws 100%
+#awsdc1 active 100% and dc1 active >= 40% do 30%/70% logic
+#awsdc1 active < 100% and dc1 active > 80% then send to dc1 100%
+#awsdc1 active < 100% and dc1 active < 40% then send to dc2
+#awsdc2 active 100% and dc2 active < 40% then send to aws 100%
+#awsdc2 active 100% and dc2 active >= 40% do 30%/70% logic
+#awsdc2 active < 100% and dc2 active > 80% then send to dc2 100%
+#awsdc2 active < 100% and dc2 active < 40% then send to dc1
+
+when HTTP_REQUEST {
+
+    set awsdc1ActiveMem [active_members myadpraas_aws_dc1]
+    set dc1ActiveMem [active_members myadpraas_Pulsar_dc1]
+    set awsdc1TotalMem [members myadpraas_aws_dc1]
+    set dc1TotalMem [members myadpraas_Pulsar_dc1]
+    set dc1RActivePer [expr {((((($dc1ActiveMem*100)/$dc1TotalMem))/10)*10)/10}]
+    set awsdc1RActivePer [expr {((((($awsdc1ActiveMem*100)/$awsdc1TotalMem))/10)*10)/10}]
+
+    set awsdc2ActiveMem [active_members myadpraas_aws_dc2]
+    set dc2ActiveMem [active_members myadpraas_Pulsar_dc2]
+    set awsdc2TotalMem [members myadpraas_aws_dc2]
+    set dc2TotalMem [members myadpraas_Pulsar_dc2]
+    set dc2RActivePer [expr {((((($dc2ActiveMem*100)/$dc2TotalMem))/10)*10)/10}]
+    set awsdc2RActivePer [expr {((((($awsdc2ActiveMem*100)/$awsdc2TotalMem))/10)*10)/10}]
+
+    set splunkpool p_dc1gwsef5logapp
+
+    if {([active_members myadpraas_aws_dc1]) or ([active_members myadpraas_Pulsar_dc1])} {
+        if {( $awsdc1RActivePer == 10 ) and ( $dc1RActivePer < 4 )} {
+            #Send all traffic to AWS
+            #log local0. "Active Members in DC1: $dc1ActiveMem - Routing traffic to the AWS pool myadpraas_aws_dc1"
+            pool myadpraas_aws_dc1
+        } elseif {(  $awsdc1RActivePer == 10 ) and ( $dc1RActivePer >= 4 )} {
+            #30/70 logic
+            if { rand() < 0.3 } {
+                #log local0. "30/70 split Packet Going to AWS"
+                pool myadpraas_aws_dc1
+            } else {
+                #log local0. "30/70 split Packet Going to DC"
+                pool myadpraas_Pulsar_dc1
+            }
+        } elseif {( $awsdc1RActivePer < 10 ) and ( $dc1RActivePer > 8 )} {
+            #Send all traffic to DC
+            #log local0. "Active Members in DC1: $dc1ActiveMem - Routing traffic to the dc1 pool myadpraas_Pulsar_dc1"
+            pool myadpraas_Pulsar_dc1
+        } elseif {( $awsdc1RActivePer < 10 ) and ( $dc1RActivePer < 4 )} {
+            #log local0. "MYADPRAAS PROD-DC1 ALERT - NO MORE POOLS TO SELECT - USING DC2 POOL"
+            HSL::send [HSL::open -proto UDP -pool $splunkpool] "MYADPRAAS PROD-DC1 ALERT - NO MORE POOLS TO SELECT - USING DC2 POOL\r\n"
+            if {( $awsdc2RActivePer == 10 ) and ( $dc2RActivePer < 4 )} {
+                #Send all traffic to AWS
+                #log local0. "Active Members in DC2: $dc2ActiveMem - Routing traffic to the AWS pool myadpraas_aws_dc2"
+                pool myadpraas_aws_dc2
+            }   elseif {(  $awsdc2RActivePer == 10 ) and ( $dc2RActivePer >= 4 )} {
+                #30/70 logic
+                if { rand() < 0.3 } {
+                    #log local0. "30/70 split Packet Going to AWS"
+                    pool myadpraas_aws_dc2
+                } else {
+                    #log local0. "30/70 split Packet Going to DC"
+                    pool myadpraas_Pulsar_dc2
+                }
+            }   elseif {( $awsdc2RActivePer < 10 ) and ( $dc2RActivePer > 8 )} {
+                #Send all traffic to DC
+                #log local0. "Active Members in DC2: $dc2ActiveMem - Routing traffic to the dc2 pool myadpraas_Pulsar_dc2"
+                pool myadpraas_Pulsar_dc2
+            }
+
+        } else {
+            #log local0. "ALL SERVERS LOW ON CAPACITY! Sending traffic to default pool"
+            HSL::send [HSL::open -proto UDP -pool $splunkpool] "MYADPRAAS PROD-DC1 ALERT - ALL SERVERS LOW ON CAPACITY!\r\n"
+        }
+    }
+
+}
