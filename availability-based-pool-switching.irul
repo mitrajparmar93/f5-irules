@@ -1,0 +1,35 @@
+# irule to switch between open-resty nodes and p1 servers based on availability
+
+when HTTP_REQUEST {
+
+    set p1ActiveMem [active_members p_application.domain.com_pool1]
+    set p2ActiveMem [active_members p_application.domain.com_pool2]
+    set p2TotalMem [members p_application.domain.com_pool2]
+    set p2ActivePer [expr {((((($p2ActiveMem*100)/$p2TotalMem))/10)*10)/10}]
+
+    if {($p1ActiveMem > 0) p2 ($p2ActiveMem > 0)} {
+
+        if {($p2ActivePer >= 5)} {
+
+            #send all traffic to open resty nodes
+            pool p_application.domain.com_pool2
+            log local0. "All traffic going through pool2"
+
+        } elseif {($p2ActivePer < 5)} {
+            # send all traffic to pool1
+            pool p_application.domain.com_pool1
+            log local0. "Less than 50% availability for pool2."
+            log local0. "Switching Traffic to pool1"
+        } else {
+
+            log local0. "Switching to default pool"
+        }
+
+    } else {
+
+        log local0. "ERROR Not enough members available!"
+    }
+
+}
+
+
